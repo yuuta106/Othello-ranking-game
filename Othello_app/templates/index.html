@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<style>
+#pass-message {
+    margin-top: 20px;
+    font-size: 2rem;
+    color: yellow;
+    font-weight: bold;
+    text-shadow: 2px 2px 4px red;
+}
+</style>
+</head>
+<body class="bg-dark text-center text-white">
+
+<div class="container-fluid mt-5 main-wrapper">
+    <h1 id="turn-title" class="mb-4">Othello Game</h1>
+
+    <div id="start-screen">
+        <h3>Please choose play first or second.</h3>
+        <button class="btn btn-dark" onclick="startGame('player')">Play First（Black）</button>
+        <button class="btn btn-light" onclick="startGame('cpu')">Play Second（White）</button>
+    </div>
+
+    <div id="nickname-screen" style="display:none;">
+        <div class="form-group mx-auto" style="max-width: 400px;">
+            <label for="nickname">Nickname</label>
+            <input type="text" class="form-control" id="nickname" placeholder="Enter your nickname">
+            <p class="score-info">
+                Your score equals the number of stones you control at the end of the game.
+                Achieve a high score to enter the ranking!
+            </p>
+        </div>
+        <button class="btn btn-success mt-3 w-100" onclick="submitNickname()">Start Game</button>
+    </div>
+
+    <div id="game-screen" style="display:none;">
+        <div class="board mx-auto">
+            {% for i in range(64) %}
+            <div class="cell" data-index="{{ i }}"></div>
+            {% endfor %}
+        </div>
+        <div id="pass-message"></div>
+    </div>
+</div>
+
+<script>
+let playerOrder = null;
+let playerName = null;
+let currentPlayer = "black";
+
+let board = new Uint8Array(64);
+board[27]=2; board[28]=1;
+board[35]=1; board[36]=2;
+
+const directions=[[ -1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]];
+
+/* ===============================
+   共通ロジック
+================================*/
+function startGame(order){
+    playerOrder = order;
+
+    // スタート画面を隠す
+    document.getElementById("start-screen").style.display = "none";
+
+    // ニックネーム画面を表示
+    document.getElementById("nickname-screen").style.display = "block";
+}
+
+function updateTurnTitle(){
+    const title = document.getElementById("turn-title");
+
+    const cpuColor = playerOrder === "player" ? "white" : "black";
+    const playerColor = playerOrder === "player" ? "black" : "white";
+
+    if(currentPlayer === playerColor){
+        title.textContent = `Your Turn (${currentPlayer === "black" ? "Black" : "White"})`;
+    }else{
+        title.textContent = `CPU Turn (${currentPlayer === "black" ? "Black" : "White"})`;
+    }
+}
+
+function isGameOver(boardState){
+    return getValidMoves(boardState,"black").length===0 &&
+           getValidMoves(boardState,"white").length===0;
+}
+
+
+let isPassWaiting = false; // パス待ちフラグ
+
+function nextTurn() {
+    currentPlayer = currentPlayer === "black" ? "white" : "black";
+
+    const passMessageEl = document.getElementById("pass-message");
+    passMessageEl.innerHTML = "";
+
+    const blackMoves = getValidMoves(board, "black").length;
+    const whiteMoves = getValidMoves(board, "white").length;
+
+    if (isGameOver(board)) {
+
+    const emptyCount = board.filter(x => x === 0).length;
+
+    const finishMessage =
+        emptyCount === 0
+        ? "Finish!"
+        : "Each has no moves. Finish!";
+
+    passMessageEl.innerHTML = `
+        <div>${finishMessage}</div>
+        <button id="end-confirm-btn" class="btn btn-danger mt-3">
+            Show Result
+        </button>
+    `;
+
+    document.getElementById("end-confirm-btn")
+        .addEventListener("click", endGame);
+
+    return;
+}
+
+
+    const moves = getValidMoves(board, currentPlayer);
+
+    // ✅ パス処理
+    if(moves.length === 0) {
+
+        const isPlayerTurn =
+            (playerOrder === "player" && currentPlayer === "black") ||
+            (playerOrder === "cpu" && currentPlayer === "white");
+
+        passMessageEl.innerHTML = `
+            ${isPlayerTurn ? "You have no moves! Your turn is skipped." : "CPU has no moves! CPU turn is skipped."}
+            <br>
+            <button id="pass-confirm-btn" class="btn btn-warning mt-2">
+                Continue
+            </button>
+        `;
+
+        document.getElementById("pass-confirm-btn")
+            .addEventListener("click", () => {
+                passMessageEl.innerHTML = "";
+                nextTurn();
+            });
+
+        return;
+    }
+
+    renderBoard();
+    updateTurnTitle();
+    cpuMove();
+}
+
+
+// 終了処理
+function endGame() {
+    const blackCount = board.filter(x => x === 1).length;
+    const whiteCount = board.filter(x => x === 2).length;
+
+    const playerColor = playerOrder === "player" ? "black" : "white";
+    const playerScore = playerColor === "black" ? blackCount : whiteCount;
+    const cpuScore = playerColor === "black" ? whiteCount : blackCount;
+
+    let winner;
+    if (playerScore > cpuScore) winner = "You";
+    else if (playerScore < cpuScore) winner = "CPU";
+    else winner = "Draw";
+
+    localStorage.setItem("lastResult", JSON.stringify({
+        black: blackCount,
+        white: whiteCount,
+        winner: winner,
+        yourPoint: playerScore
+    }));
+
+    //  ここが修正ポイント
+    fetch("/submit_score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: playerName, score: playerScore })
+    })
+    .then(res => res.json())
+    .then(data => {
+        console.log("Score submitted:", data);
+
+        //  送信成功してから移動
+        window.location.href = "/highscore";
+    })
+    .catch(err => {
+        console.error("Error submitting score:", err);
+        alert("Error submitting score");
+    });
+}
+
+
+
+
+function submitNickname(){
+    const nameInput = document.getElementById("nickname");
+    playerName = nameInput.value.trim();
+
+    if(playerName === ""){
+        alert("Please enter your nickname.");
+        return;
+    }
+
+    document.getElementById("nickname-screen").style.display = "none";
+    document.getElementById("game-screen").style.display = "block";
+
+    renderBoard();
+    updateTurnTitle();
+    // CPUが先攻ならすぐ動かす
+    if(playerOrder === "cpu"){
+        currentPlayer = "black";
+        cpuMove();
+    }
+}
+
+function inBoard(r,c){ return r>=0&&r<8&&c>=0&&c<8; }
+
+function copyBoard(src){
+    const dst=new Uint8Array(64);
+    for(let i=0;i<64;i++) dst[i]=src[i];
+    return dst;
+}
+
+function canPlaceForBoard(boardState,index,player){
+    if(boardState[index]!==0) return false;
+    const me=player==="black"?1:2;
+    const opp=me===1?2:1;
+    const row=Math.floor(index/8), col=index%8;
+
+    for(let [dR,dC] of directions){
+        let r=row+dR,c=col+dC,line=0;
+        while(inBoard(r,c)){
+            const i=r*8+c;
+            if(boardState[i]===opp) line++;
+            else if(boardState[i]===me){
+                if(line>0) return true;
+                break;
+            }else break;
+            r+=dR; c+=dC;
+        }
+    }
+    return false;
+}
+
+function getValidMoves(boardState,player){
+    const moves=[];
+    for(let i=0;i<64;i++)
+        if(canPlaceForBoard(boardState,i,player)) moves.push(i);
+    return moves;
+}
+
+function placeAndFlipForBoard(boardState,index,player){
+    const me=player==="black"?1:2;
+    const opp=me===1?2:1;
+    boardState[index]=me;
+    const row=Math.floor(index/8), col=index%8;
+
+    for(let [dR,dC] of directions){
+        let r=row+dR,c=col+dC,line=[];
+        while(inBoard(r,c)){
+            const i=r*8+c;
+            if(boardState[i]===opp) line.push(i);
+            else if(boardState[i]===me){
+                for(let j of line) boardState[j]=me;
+                break;
+            }else break;
+            r+=dR;c+=dC;
+        }
+    }
+}
+
+
+/* ===============================
+   評価関数
+================================*/
+const boardWeight=[
+ 200,-90,5,1,1,5,-90,200,
+ -90,-110,-4,-4,-4,-4,-110,-90,
+ 5,-4,0,-1,-1,0,-4,5,
+ 1,-4,-1,-1,-1,-1,-4,1,
+ 1,-4,-1,-1,-1,-1,-4,1,
+ 5,-4,0,-1,-1,0,-4,5,
+ -90,-110,-4,-4,-4,-4,-110,-90,
+ 200,-90,5,1,1,5,-90,200
+];
+
+function evaluate(boardState){
+    const cpuColor=playerOrder==="player"?"white":"black";
+    const oppColor=cpuColor==="black"?"white":"black";
+    const cpu=cpuColor==="black"?1:2;
+    const opp=cpu===1?2:1;
+
+    let score=0;
+    for(let i=0;i<64;i++){
+        if(boardState[i]===cpu) score+=boardWeight[i];
+        if(boardState[i]===opp) score-=boardWeight[i];
+    }
+
+    const mobility=10*(
+        getValidMoves(boardState,cpuColor).length -
+        getValidMoves(boardState,oppColor).length
+    );
+
+    return score+mobility;
+}
+
+function evaluateMidgame(boardState){
+    const cpuColor = playerOrder === "player" ? "white" : "black";
+    const oppColor = cpuColor === "black" ? "white" : "black";
+    const cpu = cpuColor === "black" ? 1 : 2;
+    const opp = cpu === 1 ? 2 : 1;
+
+    let score = 0;
+
+    // 1. 石の数差（小さく加点）
+    let cpuCount = 0, oppCount = 0;
+    for(let i = 0; i < 64; i++){
+        if(boardState[i] === cpu) cpuCount++;
+        if(boardState[i] === opp) oppCount++;
+    }
+    score += (cpuCount - oppCount) * 2;  // 小さく加点
+
+    // 2. 辺・角ボーナス
+    const corners = [0,7,56,63];
+    const edges = [
+        1,2,3,4,5,6,
+        8,16,24,32,40,48,
+        15,23,31,39,47,55,
+        57,58,59,60,61,62
+    ];
+    for(let i of corners){
+        if(boardState[i] === cpu) score += 1000;
+        if(boardState[i] === opp) score -= 1000;
+    }
+    for(let i of edges){
+        if(boardState[i] === cpu) score += 10;
+        if(boardState[i] === opp) score -= 10;
+    }
+
+    // 3. 可動域（mobility）
+    const cpuMoves = getValidMoves(boardState, cpuColor).length;
+    const oppMoves = getValidMoves(boardState, oppColor).length;
+    score += (cpuMoves - oppMoves) * 20; // mobility重視
+
+    return score;
+}
+
+function countEmptyCells(boardState){
+    return boardState.filter(x => x === 0).length;
+}
+
+function evaluateHybrid(boardState){
+    const empty = countEmptyCells(boardState);
+
+    // 終盤：残り7手以下なら石差最大化
+    if(empty <= 9){
+        const cpuColor = playerOrder === "player" ? "white" : "black";
+        const oppColor = cpuColor === "black" ? "white" : "black";
+        const cpu = cpuColor === "black" ? 1 : 2;
+        const opp = cpu === 1 ? 2 : 1;
+
+        let cpuCount = 0, oppCount = 0;
+        for(let i=0;i<64;i++){
+            if(boardState[i]===cpu) cpuCount++;
+            if(boardState[i]===opp) oppCount++;
+        }
+        return cpuCount - oppCount;
+    }
+
+    // 中盤：空きマス8~20くらい（目安）なら中盤評価
+    if(empty <= 20){  
+        return evaluateMidgame(boardState);
+    }
+
+    // 序盤
+    return evaluate(boardState);
+}
+
+
+
+/* ===============================
+   Minimax
+================================*/
+function minimaxAB(boardState, depth, player, alpha, beta) {
+    if(depth === 0 || isGameOver(boardState)) {
+        return evaluateHybrid(boardState);
+    }
+
+    const moves = getValidMoves(boardState, player);
+    const nextPlayer = player === "black" ? "white" : "black";
+
+    if(moves.length === 0) {
+        // パスの場合
+        return minimaxAB(boardState, depth - 1, nextPlayer, alpha, beta);
+    }
+
+    const cpuColor = playerOrder === "player" ? "white" : "black";
+const isMaximizing = player === cpuColor;
+
+
+    if(isMaximizing) {
+        let maxEval = -Infinity;
+        for(let m of moves) {
+            const nextBoard = copyBoard(boardState);
+            placeAndFlipForBoard(nextBoard, m, player);
+            const evalScore = minimaxAB(nextBoard, depth - 1, nextPlayer, alpha, beta);
+            maxEval = Math.max(maxEval, evalScore);
+            alpha = Math.max(alpha, evalScore);
+            if(beta <= alpha) break; // 枝刈り
+        }
+        return maxEval;
+    } else {
+        let minEval = Infinity;
+        for(let m of moves) {
+            const nextBoard = copyBoard(boardState);
+            placeAndFlipForBoard(nextBoard, m, player);
+            const evalScore = minimaxAB(nextBoard, depth - 1, nextPlayer, alpha, beta);
+            minEval = Math.min(minEval, evalScore);
+            beta = Math.min(beta, evalScore);
+            if(beta <= alpha) break; // 枝刈り
+        }
+        return minEval;
+    }
+}
+
+function findBestMoveAB(depth) {
+    const cpuColor = playerOrder === "player" ? "white" : "black";
+    const moves = getValidMoves(board, cpuColor);
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for(let m of moves) {
+        const nextBoard = copyBoard(board);
+        placeAndFlipForBoard(nextBoard, m, cpuColor);
+        const score = minimaxAB(nextBoard, depth - 1, cpuColor === "black" ? "white" : "black", -Infinity, Infinity);
+        if(score > bestScore) {
+            bestScore = score;
+            bestMove = m;
+        }
+    }
+    return bestMove;
+}
+
+
+/* ===============================
+   UI側
+================================*/
+function canPlace(i,p){ return canPlaceForBoard(board,i,p); }
+
+async function placeAndFlip(index){
+    if(!canPlace(index,currentPlayer)) return;
+
+    const me=currentPlayer==="black"?1:2;
+    const opp=me===1?2:1;
+    board[index]=me;
+
+    const row=Math.floor(index/8), col=index%8;
+    let stones=[];
+
+    for(let [dR,dC] of directions){
+        let r=row+dR,c=col+dC,line=[];
+        while(inBoard(r,c)){
+            let i=r*8+c;
+            if(board[i]===opp) line.push(i);
+            else if(board[i]===me){
+                stones.push(...line);
+                break;
+            }else break;
+            r+=dR;c+=dC;
+        }
+    }
+
+    board[index]=me;
+    for(let s of stones) board[s]=me;
+
+    renderBoard();
+
+// 石を順番にひっくり返す
+let delay = 0;
+
+stones.forEach((s, index) => {
+    setTimeout(() => {
+        board[s] = me;
+        renderBoard();
+    }, 120 * (index + 1));   // ←速度調整ここ
+});
+
+// 最後の石が終わったらターン交代
+setTimeout(() => {
+    nextTurn();
+}, 120 * stones.length + 200);
+
+}
+
+function cpuMove(){
+    const cpuColor = playerOrder === "player" ? "white" : "black";
+    if(currentPlayer !== cpuColor) return;
+
+    const emptyCount = board.filter(x => x === 0).length;
+    let move = null;
+
+    if(emptyCount <= 9){
+        // 終盤：残り手数 = 空きマス数まで読む
+        move = findBestMoveAB(emptyCount);
+    } else if(emptyCount <= 20){
+        // 中盤：深さ4で読む
+        move = findBestMoveAB(4);
+    } else {
+        // 序盤：深さ3で読む
+        move = findBestMoveAB(3);
+    }
+
+    if(move !== null){
+        setTimeout(() => placeAndFlip(move), 300);
+    }
+}
+
+
+
+
+
+function highlightLegalMoves(){
+    document.querySelectorAll(".cell").forEach((cell,i)=>{
+        cell.classList.remove("legal");
+        if(canPlace(i,currentPlayer)) cell.classList.add("legal");
+    });
+}
+
+function renderBoard(){
+    document.querySelectorAll(".cell").forEach((cell,i)=>{
+
+        let piece = cell.querySelector(".piece");
+
+        // まだ石がないなら作る
+        if(!piece && board[i] !== 0){
+            cell.innerHTML = `
+                <div class="piece">
+                    <div class="front black"></div>
+                    <div class="back white"></div>
+                </div>`;
+            piece = cell.querySelector(".piece");
+        }
+
+        if(piece){
+            if(board[i] === 1){
+                piece.classList.add("flipped");
+            }
+            else if(board[i] === 2){
+                piece.classList.remove("flipped");
+            }
+        }
+    });
+
+    highlightLegalMoves();
+}
+
+
+
+document.addEventListener("DOMContentLoaded",()=>{
+    document.querySelectorAll(".cell").forEach(cell=>{
+        cell.addEventListener("click",()=>{
+            const index=parseInt(cell.dataset.index);
+            placeAndFlip(index);
+        });
+    });
+
+    document.getElementById("nickname").addEventListener("keydown", function(e){
+        if(e.key === "Enter"){
+            submitNickname();
+        }
+    });
+});
+</script>
+
+<footer class="copyright" >
+© 2026 Othello Ranking Game. All Rights Reserved.
+</footer>
+
+</body>
+</html>
